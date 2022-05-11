@@ -144,10 +144,11 @@ public class AnmVm {
                     ((float u, float v), (float tw, float th)) = (Uv, Size);
                     (float sx, float sy) = Scale;
                     mat *= Matrix.CreateScale(tw * sx, th * sy, 1f);
-                    // mat *= Matrix.CreateRotationX(-Rotation.X);
-                    // mat *= Matrix.CreateRotationY(Rotation.Y);
-                    // mat *= Matrix.CreateRotationZ(-Rotation.Z);
+                    mat *= Matrix.CreateRotationX(Rotation.X);
+                    mat *= Matrix.CreateRotationY(Rotation.Y);
+                    mat *= Matrix.CreateRotationZ(Rotation.Z);
                     mat *= Matrix.CreateTranslation(Position);
+                    // Console.WriteLine(mat.Translation);
                     // if (AnchoredTopLeft) {
                     //     mat *= Matrix.CreateTranslation(-sx / 2f, -sy / 2f, 1f);
                     // }
@@ -161,14 +162,19 @@ public class AnmVm {
                     float top = (v + th) * h;
 
                     VertexPositionColorTexture[] vertices = {
-                        new VertexPositionColorTexture(new Vector3(mat[0, 0], mat[0, 1], mat[0, 2]), Color.White, new Vector2(left, bottom)),
-                        new VertexPositionColorTexture(new Vector3(mat[1, 0], mat[1, 1], mat[1, 2]), Color.White, new Vector2(right, bottom)),
-                        new VertexPositionColorTexture(new Vector3(mat[2, 0], mat[2, 1], mat[2, 2]), Color.White, new Vector2(right, top)),
-                        new VertexPositionColorTexture(new Vector3(mat[3, 0], mat[3, 1], mat[3, 2]), Color.White, new Vector2(left, top))
+                        // new VertexPositionColorTexture(new Vector3(mat[0, 0], mat[0, 1], mat[0, 2]), Color.White, new Vector2(left, bottom)),
+                        // new VertexPositionColorTexture(new Vector3(mat[1, 0], mat[1, 1], mat[1, 2]), Color.White, new Vector2(right, bottom)),
+                        // new VertexPositionColorTexture(new Vector3(mat[2, 0], mat[2, 1], mat[2, 2]), Color.White, new Vector2(right, top)),
+                        // new VertexPositionColorTexture(new Vector3(mat[3, 0], mat[3, 1], mat[3, 2]), Color.White, new Vector2(left, top))
+                        new VertexPositionColorTexture(Position, Color.White, new Vector2(left, bottom)),
+                        new VertexPositionColorTexture(Position + new Vector3(Vector2.UnitX * Scale * Size, Position.Z), Color.White, new Vector2(right, bottom)),
+                        new VertexPositionColorTexture(Position + new Vector3(Scale * Size, Position.Z), Color.White, new Vector2(right, top)),
+                        new VertexPositionColorTexture(Position + new Vector3(Vector2.UnitY * Scale * Size, Position.Z), Color.White, new Vector2(left, top))
                     };
+                    // Console.WriteLine($"A {vertices[0].Position} {vertices[1].Position} {vertices[2].Position} {vertices[3].Position}");
                     int[] indices = {
-                        2, 1, 0,
-                        1, 2, 3
+                        1, 2, 3,
+                        0, 1, 3,
                     };
 
                     foreach (EffectPass pass in ThGame.Instance.CurrentEffect.CurrentTechnique.Passes) {

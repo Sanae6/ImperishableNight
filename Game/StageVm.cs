@@ -214,7 +214,7 @@ public class StageVm {
         ThGame.Instance.CurrentEffect.FogStart = FogNearInternal;
         ThGame.Instance.CurrentEffect.FogEnd = FogFarInternal;
 
-        Console.WriteLine($"{Position} {Facing} {Up} {Fov}");
+        // Console.WriteLine($"{Position} {Facing} {Up} {Fov}");
         Anm.Update();
     }
 }
