@@ -131,6 +131,9 @@ public class AnmVm {
         public void Draw() {
             switch (Type) {
                 case SpriteType.StageRect: {
+                    // https://projects.govanify.com/govanify/touhou/-/blob/master/src/th06/anm0_vm.rs#L90
+                    // eosd anm is older than pcb anm, that link isn't right, and i'm not sure how pcb+ does this
+        
                     // Matrix mat = new Matrix(
                     //     -0.5f, 0.5f, 0.5f, -0.5f,
                     //     -0.5f, -0.5f, 0.5f, 0.5f,
