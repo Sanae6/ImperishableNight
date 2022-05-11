@@ -25,7 +25,7 @@ public abstract class Interpolator<T> {
         }
 
         Interpolate(ref current);
-        // CurrentTime++;
+        CurrentTime++;
     }
 
     protected abstract void Interpolate(ref T current);

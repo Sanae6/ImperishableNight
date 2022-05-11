@@ -17,10 +17,13 @@ public class Gameplay : State {
 
     public override void Draw() {
         ThGame.Instance.GraphicsDevice.Clear(Stage.ClearColor);
+        Game.GraphicsDevice.BlendState = BlendState.NonPremultiplied;
+        Game.GraphicsDevice.DepthStencilState = DepthStencilState.None; // TODO: tie this to zWriteDisable
         Game.CurrentEffect.VertexColorEnabled = true;
+        Game.CurrentEffect.FogEnabled = false;
         Game.CurrentEffect.TextureEnabled = true;
-        Game.CurrentEffect.Projection = Matrix.CreatePerspectiveFieldOfView(Stage.Fov, ThGame.Instance.GraphicsDevice.Viewport.AspectRatio, 0.1f, 1000f);
-        Game.CurrentEffect.View = Matrix.CreateLookAt(Stage.Position, Stage.Facing, Stage.Up);
+        Game.CurrentEffect.Projection = Matrix.CreatePerspectiveFieldOfView(Stage.Fov, ThGame.Instance.GraphicsDevice.Viewport.AspectRatio, 0.1f, 10000f);
+        Game.CurrentEffect.View = Matrix.CreateLookAt(Stage.Position - (Vector3.UnitZ * 1000), Stage.Facing, Stage.Up);
         // Game.CurrentEffect.World = Matrix.Identity * Matrix.CreateTranslation(-Stage.Position);
         Stage.Draw();
     }
