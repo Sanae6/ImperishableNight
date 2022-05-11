@@ -8,6 +8,7 @@ namespace ImperishableNight;
 
 public class AnimationFile {
     public AnmVersion Version;
+    public string Path;
     public Vector2i Size;
     public Vector2i Position;
     public int Format;
@@ -15,17 +16,28 @@ public class AnimationFile {
     public Dictionary<int, Sprite> Sprites;
     public Dictionary<int, ScriptInfo> Scripts;
     public TextureInfo? Texture;
-    
-    private AnimationFile(){}
-    public static List<AnimationFile> ReadAnm(Span<byte> data) {
+
+    private AnimationFile() { }
+
+    public record AnimationInfo(List<AnimationFile> Animations, Dictionary<int, ScriptInfo> Scripts);
+
+    public static AnimationInfo ReadAnm(Span<byte> data) {
         SpanBuffer buffer = new SpanBuffer(data);
         List<AnimationFile> entries = new List<AnimationFile>();
+        Dictionary<int, ScriptInfo> allScripts = new Dictionary<int, ScriptInfo>();
         EosdHeader header;
-        int currentCount = 1;
+        int currentCount = 0;
         do {
             //Console.WriteLine($"Reading animation #{currentCount++}");
-            Bookmark curOffset = buffer.BookmarkLocation(0);
-            header = buffer.ReadStructure<EosdHeader>();
+            Bookmark curOffset = buffer.BookmarkLocation();
+            header = buffer.Read<EosdHeader>();
+            string path;
+            {
+                Bookmark bm = buffer.BookmarkLocation();
+                curOffset.Jump(ref buffer, header.NameOffset);
+                path = buffer.ReadStringNull();
+                bm.Jump(ref buffer);
+            }
             Dictionary<int, Sprite> sprites = new Dictionary<int, Sprite>();
             Dictionary<int, ScriptInfo> scripts = new Dictionary<int, ScriptInfo>();
 
@@ -35,7 +47,7 @@ public class AnimationFile {
                 Span<int> offsets = MemoryMarshal.Cast<byte, int>(buffer.Slice(spriteOffsetsSize));
                 for (int i = 0; i < header.SpriteCount; i++) {
                     curOffset.Jump(ref buffer, offsets[i]);
-                    Sprite sprite = buffer.ReadStructure<Sprite>();
+                    Sprite sprite = buffer.Read<Sprite>();
                     sprites.Add(sprite.Id, sprite);
                 }
 
@@ -48,9 +60,12 @@ public class AnimationFile {
                     curOffset.Jump(ref buffer, scriptHeaders[i].Offset);
                     int offset = 0,
                         j = 0;
-                    ScriptInfo info = new ScriptInfo();
+                    ScriptInfo info = new ScriptInfo {
+                        AnmIndex = currentCount,
+                        Id = scriptHeaders[i].Id
+                    };
                     while (true) {
-                        AnmInstruction inst = buffer.ReadDynamicStructure<AnmInstruction>();
+                        AnmInstruction inst = buffer.ReadDynamic<AnmInstruction>();
                         if (inst.Type == Opcode.ParsingEnd) break;
                         inst.Offset = offset;
                         inst.Index = j;
@@ -58,18 +73,21 @@ public class AnimationFile {
                         info.Instructions.Add(inst);
                         info.OffsetIndexMap.Add(inst.Offset, j++);
                     }
-                    scripts.Add(scriptHeaders[i].Id, info);
+
+                    allScripts[info.Id] = info;
+                    scripts.Add(info.Id, info);
                 }
             }
 
             TextureInfo? textureInfo = null;
             if (header.HasData != 0) {
                 curOffset.Jump(ref buffer, header.ThtxOffset);
-                TextureHeader texHeader = buffer.ReadStructure<TextureHeader>();
+                TextureHeader texHeader = buffer.Read<TextureHeader>();
                 textureInfo = new TextureInfo(texHeader, buffer.ReadBytes(texHeader.Size).ToArray());
             }
-            
+
             entries.Add(new AnimationFile {
+                Path = path,
                 Position = header.Position,
                 Size = header.Size,
                 ColorKey = header.ColorKey,
@@ -80,10 +98,11 @@ public class AnimationFile {
                 Texture = textureInfo
             });
 
+            currentCount++;
             curOffset.Jump(ref buffer, header.NextOffset);
         } while (header.NextOffset > 0);
-        
-        return entries;
+
+        return new AnimationInfo(entries, allScripts);
     }
 
     public struct Sprite {
@@ -94,6 +113,7 @@ public class AnimationFile {
 
     public class ScriptInfo {
         public int Id;
+        public int AnmIndex;
         public List<AnmInstruction> Instructions = new List<AnmInstruction>();
         public Dictionary<int, int> OffsetIndexMap = new Dictionary<int, int>();
     }
@@ -222,7 +242,72 @@ public class AnimationFile {
         ParsingEnd = 0xFFFF
     }
 
-    public record TextureInfo(TextureHeader Header, byte[] Data);
+    public record TextureInfo(TextureHeader Header, byte[] Data) {
+        private byte[]? CachedRgba;
+
+        public byte[] ConvertToRgba() {
+            if (CachedRgba != null) return CachedRgba;
+            switch (Header.Format) {
+                case TextureFormat.Bgra8888: {
+                    SpanBuffer src = new SpanBuffer(Data);
+                    SpanBuffer dst = new SpanBuffer(new byte[Data.Length]);
+                    while (src.HasLeft) {
+                        (byte b, byte g, byte r, byte a) = (src.ReadU8(), src.ReadU8(), src.ReadU8(), src.ReadU8());
+                        dst.WriteU8(r);
+                        dst.WriteU8(g);
+                        dst.WriteU8(b);
+                        dst.WriteU8(a);
+                    }
+
+                    return CachedRgba = dst.Buffer.ToArray();
+                }
+                case TextureFormat.Rgb565: {
+                    SpanBuffer src = new SpanBuffer(Data);
+                    SpanBuffer dst = new SpanBuffer(new byte[Data.Length * 2]);
+                    while (src.HasLeft) {
+                        ushort rgb = src.ReadU16();
+                        (byte r, byte g, byte b) = ((byte) ((rgb & 0b11111000_00000000) >> 8), (byte) ((rgb & 0b00000111_11100000) >> 3), (byte) ((rgb & 0b00000000_00011111) << 3));
+                        dst.WriteU8(r);
+                        dst.WriteU8(g);
+                        dst.WriteU8(b);
+                        dst.WriteU8(byte.MaxValue);
+                    }
+
+                    return CachedRgba = dst.Buffer.ToArray();
+                }
+                case TextureFormat.Argb4444: {
+                    SpanBuffer src = new SpanBuffer(Data);
+                    SpanBuffer dst = new SpanBuffer(new byte[Data.Length * 2]);
+                    while (src.HasLeft) {
+                        ushort argb = src.ReadU16();
+                        dst.WriteU8(Scale((argb & 0x0F00) >> 8));
+                        dst.WriteU8(Scale((argb & 0x00F0) >> 4));
+                        dst.WriteU8(Scale((argb & 0x000F) >> 0));
+                        dst.WriteU8(Scale((argb & 0xF000) >> 12));
+                    }
+
+                    return CachedRgba = dst.Buffer.ToArray();
+                }
+                case TextureFormat.Gray8: {
+                    SpanBuffer src = new SpanBuffer(Data);
+                    SpanBuffer dst = new SpanBuffer(new byte[Data.Length * 4]);
+
+                    while (src.HasLeft) {
+                        byte gray = src.ReadU8();
+                        dst.WriteRepeatedU8(gray, 3);
+                        dst.WriteU8(byte.MaxValue);
+                    }
+
+                    return CachedRgba = dst.Buffer.ToArray();
+                }
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+        }
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static byte Scale(int x) => (byte) (x * 16);
+    }
 
     public struct TextureHeader {
         public int Magic;
@@ -238,7 +323,7 @@ public class AnimationFile {
         Argb4444 = 5,
         Gray8 = 7
     }
-    
+
     public enum AnmVersion : uint {
         Eosd = 0,
         Pcb = 2,

@@ -145,14 +145,14 @@ public ref struct SpanBuffer {
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public T ReadDynamicStructure<T>() where T : struct, IDynamicStructure {
+    public T ReadDynamic<T>() where T : struct, IDynamicStructure {
         T structure = Activator.CreateInstance<T>();
         structure.Load(ref this);
         return structure;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public T ReadStructure<T>() where T : unmanaged {
+    public T Read<T>() where T : unmanaged {
         int size = Unsafe.SizeOf<T>();
         ThrowIfEndOfBuffer(size);
         T t = MemoryMarshal.Read<T>(Buffer[Offset..]);
@@ -348,7 +348,7 @@ public ref struct SpanBuffer {
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Bookmark BookmarkLocation(int size) {
+    public Bookmark BookmarkLocation(int size = 0) {
         ThrowIfEndOfBuffer(size);
         Bookmark bookmark = new Bookmark {
             Offset = Offset,

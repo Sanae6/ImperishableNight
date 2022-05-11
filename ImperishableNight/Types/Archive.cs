@@ -5,7 +5,7 @@ using Newtonsoft.Json;
 namespace ImperishableNight;
 
 public class Archive : IEnumerable<Archive.Th8Entry> {
-    private static readonly CryptParams[] crypto = {
+    private static readonly CryptParams[] Crypto = {
         new CryptParams('M', 0x1b, 0x37,   0x40, 0x2000),
         new CryptParams('T', 0x51, 0xe9,   0x40, 0x3000),
         new CryptParams('A', 0xc1, 0x51, 0x1400, 0x2000),
@@ -16,20 +16,20 @@ public class Archive : IEnumerable<Archive.Th8Entry> {
         new CryptParams('*', 0x99, 0x37,  0x400, 0x1000),
     };
     public readonly byte[] FileData;
-    protected readonly Th8Entry[] entries;
-    protected readonly Dictionary<string, byte[]> fileEntryCache = new Dictionary<string, byte[]>();
+    protected readonly Th8Entry[] Entries;
+    protected readonly Dictionary<string, byte[]> FileEntryCache = new Dictionary<string, byte[]>();
 
     protected Archive(byte[] data, Th8Entry[] fileEntries) {
         FileData = data;
-        entries = fileEntries;
+        Entries = fileEntries;
     }
 
-    public virtual Span<byte> this[string index] => ReadEntry(entries.First(x => x.Filename == index)).Item1;
+    public virtual Span<byte> this[string index] => ReadEntry(Entries.First(x => x.Filename == index)).Item1;
 
-    public int Count => entries.Length;
+    public int Count => Entries.Length;
 
     public (byte[], bool) ReadEntry(Th8Entry entry) {
-        if (fileEntryCache.TryGetValue(entry.Filename, out byte[]? value))
+        if (FileEntryCache.TryGetValue(entry.Filename, out byte[]? value))
             return (value, false);
 
         SpanBuffer buffer = new SpanBuffer(FileData.AsSpan()[entry.Offset..(entry.Offset + entry.ZSize)]);
@@ -39,16 +39,16 @@ public class Archive : IEnumerable<Archive.Th8Entry> {
         }
 
         byte type = buffer.ReadU8();
-        (_, byte key, byte step, int block, int limit) = crypto.First(x => x.Type == type);
+        (_, byte key, byte step, int block, int limit) = Crypto.First(x => x.Type == type);
         buffer.Decrypt(entry.MagicFreeSize, key, step, block, limit);
         byte[] array = buffer.Slice(entry.MagicFreeSize).ToArray();
-        fileEntryCache.Add(entry.Filename, array);
+        FileEntryCache.Add(entry.Filename, array);
         return (array, true);
     }
 
     public IEnumerator<Th8Entry> GetEnumerator() {
         for (int i = 0; i < Count; i++) {
-            yield return entries[i];
+            yield return Entries[i];
         }
     }
 
@@ -59,7 +59,7 @@ public class Archive : IEnumerable<Archive.Th8Entry> {
     public static Archive ReadData(byte[] data) {
         SpanBuffer buffer = new SpanBuffer(data);
 
-        Th8Header header = buffer.ReadDynamicStructure<Th8Header>();
+        Th8Header header = buffer.ReadDynamic<Th8Header>();
         buffer.Offset = header.Offset;
         int zSize = buffer.Size - header.Offset;
 

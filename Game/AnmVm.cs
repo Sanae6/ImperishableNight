@@ -9,23 +9,21 @@ using Microsoft.Xna.Framework.Graphics;
 namespace Game;
 
 public class AnmVm {
-    public readonly List<AnimationFile> Animations;
+    public readonly AnimationFile.AnimationInfo File;
     public List<Sprite> Sprites = new List<Sprite>();
-    public List<Texture2D> Textures = new List<Texture2D>();
+    public Dictionary<AnimationFile, Texture2D> Textures = new Dictionary<AnimationFile, Texture2D>();
     public Dictionary<int, AnimationFile.ScriptInfo> Scripts;
 
-    public AnmVm(List<AnimationFile> anms) {
-        Animations = anms;
-        foreach (AnimationFile anm in Animations.Where(anm => anm.Texture != null))
-            Textures.Add(new Texture2D(ThGame.Instance.GraphicsDevice, anm.Size.X, anm.Size.Y, false, anm.Texture!.Header.Format switch {
-                AnimationFile.TextureFormat.Bgra8888 => SurfaceFormat.Bgra32,
-                AnimationFile.TextureFormat.Gray8 => throw new NotImplementedException("Gray textures not yet supported"),
-                AnimationFile.TextureFormat.Rgb565 => throw new NotImplementedException("Rgb565 textures not yet supported"),
-                AnimationFile.TextureFormat.Argb4444 => throw new NotImplementedException("Argb4444 textures not yet supported"),
-                _ => throw new ArgumentOutOfRangeException(nameof(anms))
-            }));
+    public AnmVm(AnimationFile.AnimationInfo anms) {
+        File = anms;
+        foreach (AnimationFile anm in File.Animations) {
+            if (anm.Texture == null) continue;
+            Texture2D tex = new Texture2D(ThGame.Instance.GraphicsDevice, anm.Size.X, anm.Size.Y, false, SurfaceFormat.Color);
+            tex.SetData(anm.Texture!.ConvertToRgba());
+            Textures.Add(anm, tex);
+        }
 
-        Scripts = Animations.SelectMany(x => x.Scripts).ToDictionary(x => x.Key, y => y.Value);
+        Scripts = File.Animations.SelectMany(x => x.Scripts).ToDictionary(x => x.Key, y => y.Value);
     }
 
     public void AddSprite(Sprite sprite) {
@@ -52,13 +50,14 @@ public class AnmVm {
         public Vector3 Offset;
         public Vector3 Rotation;
         public Vector3 AngularVelocity;
-        public Vector2 Scale = Vector2.One;
+        public Vector2 Scale;
         public Vector2 ScaleGrowth;
-        public Vector2 Uv = Vector2.One;
+        public Vector2 Uv;
         public Vector2 UvScroll;
-        public Vector2 Size = Vector2.One;
-        public Color PrimaryColor = Color.White;
-        public Color SecondaryColor = Color.White;
+        public Vector2 Size;
+        public Color PrimaryColor;
+        public Color SecondaryColor;
+        public Color CurrentColor => !ColorSwapped ? PrimaryColor : SecondaryColor;
         public BlendMode Blend;
         public bool AnchoredTopLeft = false; // https://exphp.github.io/thpages/#/anm/ins?g=08#ins-22
         public bool Active = true;
@@ -67,13 +66,15 @@ public class AnmVm {
         public bool ZWriteDisabled = false;
         public bool ColorSwapped = false; // untested LoL
 
-        public readonly Vector3Interpolator PosInterpolator = new Vector3Interpolator();
-        public readonly Vector3Interpolator RotationInterpolator = new Vector3Interpolator();
-        public readonly Vector2Interpolator ScaleInterpolator = new Vector2Interpolator();
-        public readonly ColorInterpolator ColorInterpolator = new ColorInterpolator();
-        public readonly ColorInterpolator Color2Interpolator = new ColorInterpolator();
-        public readonly AlphaInterpolator AlphaInterpolator = new AlphaInterpolator();
-        public readonly AlphaInterpolator Alpha2Interpolator = new AlphaInterpolator();
+        public readonly Vector3Interpolator PositionInterpolator = new Vector3Interpolator(Vector3.Zero);
+        public readonly Vector3Interpolator RotationInterpolator = new Vector3Interpolator(Vector3.Zero);
+        public readonly Vector2Interpolator ScaleInterpolator = new Vector2Interpolator(Vector2.One);
+        public readonly ColorInterpolator ColorInterpolator = new ColorInterpolator(Color.Cornsilk);
+        public readonly ColorInterpolator Color2Interpolator = new ColorInterpolator(Color.Violet);
+        public readonly AlphaInterpolator AlphaInterpolator = new AlphaInterpolator(Color.White);
+        public readonly AlphaInterpolator Alpha2Interpolator = new AlphaInterpolator(Color.White);
+        public readonly SpriteType Type;
+        public readonly StageFile.Quad Quad;
 
         public readonly AnimationFile.ScriptInfo Script;
         public readonly Dictionary<int, int> Interrupts = new Dictionary<int, int>();
@@ -81,27 +82,40 @@ public class AnmVm {
         public float F0, F1, F2, F3;
         public int Ip;
         public int Time;
-        public bool Stopped;
         public int WaitTime;
         public int ReturnIp;
         public int ReturnTime;
 
-        public Sprite(AnmVm owner, AnimationFile file, AnimationFile.Sprite? sprite, int script) {
+        private VertexBuffer VertexBuffer;
+
+        public Sprite(AnmVm owner, AnimationFile file, AnimationFile.Sprite? sprite, int script, SpriteType spriteType) {
             Owner = owner;
             File = file;
+            Type = spriteType;
             if (sprite.HasValue) {
                 SetSprite(sprite.Value);
             }
 
-            Script = file.Scripts[script];
+            Script = owner.File.Scripts[script];
+            VertexBuffer = new VertexBuffer(
+                ThGame.Instance.GraphicsDevice,
+                VertexPositionColorTexture.VertexDeclaration,
+                4,
+                BufferUsage.WriteOnly
+            );
 
             foreach (AnimationFile.AnmInstruction inst in Script.Instructions.Where(x => x.Type == AnimationFile.Opcode.InterruptLabel))
                 Interrupts.Add(inst.Buffer.ReadI32(), inst.Index);
         }
 
-        public Sprite(AnmVm owner, AnimationFile file, AnimationFile.Sprite? sprite, int script, Vector2 size)
-            : this(owner, file, sprite, script) {
+        public Sprite(AnmVm owner, AnimationFile file, StageFile.Quad quad)
+            : this(owner, file, null, quad.ScriptIndex, quad.Type switch {
+                StageFile.QuadType.Rectangle => SpriteType.StageRect,
+                StageFile.QuadType.Strip => SpriteType.StageStrip,
+                StageFile.QuadType.End or _ => throw new ArgumentOutOfRangeException(nameof(quad))
+            }) {
             Owner = owner;
+            Quad = quad;
         }
 
         public void SetSprite(int index) {
@@ -114,21 +128,79 @@ public class AnmVm {
             Size = sprite.Size.ToXna();
         }
 
-        public void Draw() { }
+        public void Draw() {
+            switch (Type) {
+                case SpriteType.StageRect: {
+                    // Matrix mat = new Matrix(
+                    //     -0.5f, 0.5f, 0.5f, -0.5f,
+                    //     -0.5f, -0.5f, 0.5f, 0.5f,
+                    //     0f, 0f, 0f, 0f,
+                    //     1f, 1f, 1f, 1f
+                    // );
+                    Matrix mat = Matrix.Identity;
+                    ((float u, float v), (float tw, float th)) = (Uv, Size);
+                    (float sx, float sy) = Scale;
+                    mat *= Matrix.CreateScale(tw * sx, th * sy, 1f);
+                    // mat *= Matrix.CreateRotationX(-Rotation.X);
+                    // mat *= Matrix.CreateRotationY(Rotation.Y);
+                    // mat *= Matrix.CreateRotationZ(-Rotation.Z);
+                    mat *= Matrix.CreateTranslation(Position);
+                    // if (AnchoredTopLeft) {
+                    //     mat *= Matrix.CreateTranslation(-sx / 2f, -sy / 2f, 1f);
+                    // }
+
+                    Texture2D tex = ThGame.Instance.CurrentEffect.Texture = Owner.Textures[File];
+                    (float w, float h) = (1f / tex.Width, 1f / tex.Height);
+
+                    float left = u * w;
+                    float right = (u + tw) * w;
+                    float bottom = v * h;
+                    float top = (v + th) * h;
+
+                    VertexPositionColorTexture[] vertices = {
+                        new VertexPositionColorTexture(new Vector3(mat[0, 0], mat[0, 1], mat[0, 2]), Color.White, new Vector2(left, bottom)),
+                        new VertexPositionColorTexture(new Vector3(mat[1, 0], mat[1, 1], mat[1, 2]), Color.White, new Vector2(right, bottom)),
+                        new VertexPositionColorTexture(new Vector3(mat[2, 0], mat[2, 1], mat[2, 2]), Color.White, new Vector2(right, top)),
+                        new VertexPositionColorTexture(new Vector3(mat[3, 0], mat[3, 1], mat[3, 2]), Color.White, new Vector2(left, top))
+                    };
+                    int[] indices = {
+                        2, 1, 0,
+                        1, 2, 3
+                    };
+
+                    foreach (EffectPass pass in ThGame.Instance.CurrentEffect.CurrentTechnique.Passes) {
+                        pass.Apply();
+                        ThGame.Instance.GraphicsDevice.DrawUserIndexedPrimitives(PrimitiveType.TriangleList, vertices, 0, 4, indices, 0, 2);
+                    }
+
+                    break;
+                }
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+        }
 
         public void Update() {
-            if (!Active) return;
-
-            while (Active && WaitTime != 0 && Ip < Script.Instructions.Count) {
+            while (Active && WaitTime == 0 && Ip < Script.Instructions.Count) {
                 AnimationFile.AnmInstruction inst = Script.Instructions[Ip];
-                if (Time > inst.Time) break;
+                if (Time < inst.Time) break;
                 Ip++;
+                if (Ip >= Script.Instructions.Count) Active = false;
 
                 if (Time == inst.Time) RunInstruction(inst);
             }
 
             if (WaitTime > 0) WaitTime--;
-            else Time++;
+            else if (Active) Time++;
+
+            PositionInterpolator.Update(ref Position);
+            RotationInterpolator.Update(ref Rotation);
+            ScaleInterpolator.Update(ref Scale);
+            ColorInterpolator.Update(ref PrimaryColor);
+            Color2Interpolator.Update(ref SecondaryColor);
+            AlphaInterpolator.Update(ref SecondaryColor);
+            Alpha2Interpolator.Update(ref SecondaryColor);
+            Uv += UvScroll;
         }
 
         public void Interrupt(int interrupt) {
@@ -138,6 +210,7 @@ public class AnmVm {
             }
 
             Visible = true;
+            Active = true;
             ReturnIp = Ip;
             ReturnTime = Time;
             Ip = ip;
@@ -186,16 +259,16 @@ public class AnmVm {
                     GetIntVar(buffer.ReadI32())++;
                     goto case AnimationFile.Opcode.Jump;
                 case AnimationFile.Opcode.Pos:
-                    Position = buffer.ReadStructure<Vector3>();
+                    Position = buffer.Read<Vector3>();
                     break;
                 case AnimationFile.Opcode.Scale:
-                    Scale = buffer.ReadStructure<Vector2>();
+                    Scale = buffer.Read<Vector2>();
                     break;
                 case AnimationFile.Opcode.Alpha:
                     PrimaryColor = new Color(PrimaryColor, buffer.ReadF32());
                     break;
                 case AnimationFile.Opcode.Color: {
-                    (PrimaryColor, byte a) = (new Color(buffer.ReadStructure<Vector3>()), PrimaryColor.A);
+                    (PrimaryColor, byte a) = (new Color(buffer.Read<Vector3>()), PrimaryColor.A);
                     PrimaryColor.A = a;
                     break;
                 }
@@ -206,31 +279,40 @@ public class AnmVm {
                     Scale.Y = -Scale.Y;
                     break;
                 case AnimationFile.Opcode.Rotate:
-                    Rotation = buffer.ReadStructure<Vector3>();
+                    Rotation = buffer.Read<Vector3>();
                     break;
                 case AnimationFile.Opcode.AngleVel:
-                    AngularVelocity = buffer.ReadStructure<Vector3>();
+                    AngularVelocity = buffer.Read<Vector3>();
                     break;
                 case AnimationFile.Opcode.ScaleGrowth:
-                    ScaleGrowth = buffer.ReadStructure<Vector2>();
+                    ScaleGrowth = buffer.Read<Vector2>();
                     break;
                 case AnimationFile.Opcode.AlphaTimeLinear:
-                    AlphaInterpolator.Set(PrimaryColor, new Color(Color.White, buffer.ReadI32()), buffer.ReadI32(), InterpolationModes.Linear);
+                    AlphaInterpolator.Initial = AlphaInterpolator.Final;
+                    AlphaInterpolator.Final = new Color(Color.White, buffer.ReadI32());
+                    AlphaInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Linear);
                     break;
                 case AnimationFile.Opcode.BlendAdditiveSet:
                     Blend = buffer.ReadI32() > 0 ? BlendMode.Add : BlendMode.Normal;
                     break;
                 case AnimationFile.Opcode.PosTimeLinear:
-                    PosInterpolator.Set(Position, buffer.ReadStructure<Vector3>(), buffer.ReadI32(), InterpolationModes.Linear);
+                    PositionInterpolator.Initial = PositionInterpolator.Final;
+                    PositionInterpolator.Final = buffer.Read<Vector3>();
+                    PositionInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Linear);
                     break;
                 case AnimationFile.Opcode.PosTimeEaseOutSquare:
-                    PosInterpolator.Set(Position, buffer.ReadStructure<Vector3>(), buffer.ReadI32(), InterpolationModes.EaseOutSquare);
+                    PositionInterpolator.Initial = PositionInterpolator.Final;
+                    PositionInterpolator.Final = buffer.Read<Vector3>();
+                    PositionInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.EaseOutSquare);
                     break;
                 case AnimationFile.Opcode.PosTimeEaseOutQuad:
-                    PosInterpolator.Set(Position, buffer.ReadStructure<Vector3>(), buffer.ReadI32(), InterpolationModes.EaseOutQuad);
+                    PositionInterpolator.Initial = PositionInterpolator.Final;
+                    PositionInterpolator.Final = buffer.Read<Vector3>();
+                    PositionInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.EaseOutQuad);
                     break;
                 case AnimationFile.Opcode.Stop:
-                    Stopped = true;
+                    // Stopped = true;
+                    WaitTime = -1;
                     break;
                 case AnimationFile.Opcode.AnchorTopLeft:
                     AnchoredTopLeft = true;
@@ -254,36 +336,44 @@ public class AnmVm {
                     Visible = buffer.ReadI32() > 0;
                     break;
                 case AnimationFile.Opcode.ScaleTimeLinear:
-                    ScaleInterpolator.Set(Scale, buffer.ReadStructure<Vector2>(), buffer.ReadI32(), InterpolationModes.Linear);
+                    ScaleInterpolator.Initial = ScaleInterpolator.Final;
+                    ScaleInterpolator.Final = buffer.Read<Vector2>();
+                    ScaleInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Linear);
                     break;
                 case AnimationFile.Opcode.DisableZWrite:
                     ZWriteDisabled = buffer.ReadI32() > 0;
                     break;
                 case AnimationFile.Opcode.Ins31:
-                    throw new NotImplementedException("What should this do?");
+                    // TODO: What should this do???
+                    break;
                 case AnimationFile.Opcode.PosTime: {
-                    (int time, int mode, Vector3 goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadStructure<Vector3>());
-                    PosInterpolator.Set(Position, goal, time, InterpolationModes.Modes[mode]);
+                    PositionInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    PositionInterpolator.Initial = PositionInterpolator.Final;
+                    PositionInterpolator.Final = buffer.Read<Vector3>();
                     break;
                 }
                 case AnimationFile.Opcode.ColorTime: {
-                    (int time, int mode, Vector3 goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadStructure<Vector3>());
-                    ColorInterpolator.Set(PrimaryColor, new Color(goal), time, InterpolationModes.Modes[mode]);
+                    ColorInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    ColorInterpolator.Initial = ColorInterpolator.Final;
+                    ColorInterpolator.Final = new Color(buffer.Read<Vector3>());
                     break;
                 }
                 case AnimationFile.Opcode.AlphaTime: {
-                    (int time, int mode, float goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadF32());
-                    AlphaInterpolator.Set(PrimaryColor, new Color(Color.White, goal), time, InterpolationModes.Modes[mode]);
+                    AlphaInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    AlphaInterpolator.Initial = AlphaInterpolator.Final;
+                    AlphaInterpolator.Final = new Color(Color.White, buffer.ReadF32());
                     break;
                 }
                 case AnimationFile.Opcode.RotateTime: {
-                    (int time, int mode, Vector3 goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadStructure<Vector3>());
-                    RotationInterpolator.Set(Rotation, goal, time, InterpolationModes.Modes[mode]);
+                    RotationInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    RotationInterpolator.Initial = RotationInterpolator.Final;
+                    RotationInterpolator.Final = buffer.Read<Vector3>();
                     break;
                 }
                 case AnimationFile.Opcode.ScaleTime: {
-                    (int time, int mode, Vector2 goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadStructure<Vector2>());
-                    ScaleInterpolator.Set(Scale, goal, time, InterpolationModes.Modes[mode]);
+                    ScaleInterpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    ScaleInterpolator.Initial = ScaleInterpolator.Final;
+                    ScaleInterpolator.Final = buffer.Read<Vector2>();
                     break;
                 }
                 case AnimationFile.Opcode.IntSet:
@@ -353,11 +443,11 @@ public class AnmVm {
                     GetFloatVar(buffer.ReadI32()) = buffer.ReadF32() % buffer.ReadF32();
                     break;
                 case AnimationFile.Opcode.IntSetRand:
-                    // TODO: PROPERLY IMPLEMENT SEEDED RNG
+                    // TODO: Implement seeded random number generation
                     GetIntVar(buffer.ReadI32()) = Random.Shared.Next();
                     break;
                 case AnimationFile.Opcode.FloatSetRand:
-                    // TODO: PROPERLY IMPLEMENT SEEDED RNG
+                    // TODO: Implement seeded random number generation
                     GetFloatVar(buffer.ReadI32()) = Random.Shared.NextSingle();
                     break;
                 case AnimationFile.Opcode.Sin:
@@ -382,13 +472,13 @@ public class AnmVm {
                     if (buffer.ReadI32() == buffer.ReadI32()) goto case AnimationFile.Opcode.Jump;
                     break;
                 case AnimationFile.Opcode.FloatEquals:
-                    if (buffer.ReadF32() == buffer.ReadF32()) goto case AnimationFile.Opcode.Jump;
+                    if (Math.Abs(buffer.ReadF32() - buffer.ReadF32()) < 0.001) goto case AnimationFile.Opcode.Jump;
                     break;
                 case AnimationFile.Opcode.IntNotEquals:
                     if (buffer.ReadI32() != buffer.ReadI32()) goto case AnimationFile.Opcode.Jump;
                     break;
                 case AnimationFile.Opcode.FloatNotEquals:
-                    if (buffer.ReadF32() != buffer.ReadF32()) goto case AnimationFile.Opcode.Jump;
+                    if (Math.Abs(buffer.ReadF32() - buffer.ReadF32()) > 0.001) goto case AnimationFile.Opcode.Jump;
                     break;
                 case AnimationFile.Opcode.IntLess:
                     if (buffer.ReadI32() < buffer.ReadI32()) goto case AnimationFile.Opcode.Jump;
@@ -426,8 +516,11 @@ public class AnmVm {
                 case AnimationFile.Opcode.BlendMode:
                     Blend = (BlendMode) buffer.ReadI32();
                     break;
+                case AnimationFile.Opcode.PlayerHitType:
+                    // TODO: Find out what this does
+                    break;
                 case AnimationFile.Opcode.Color2: {
-                    (SecondaryColor, byte a) = (new Color(buffer.ReadStructure<Vector3>()), SecondaryColor.A);
+                    (SecondaryColor, byte a) = (new Color(buffer.Read<Vector3>()), SecondaryColor.A);
                     SecondaryColor.A = a;
                     break;
                 }
@@ -435,21 +528,22 @@ public class AnmVm {
                     SecondaryColor = new Color(SecondaryColor, buffer.ReadF32());
                     break;
                 case AnimationFile.Opcode.Color2Time: {
-                    (int time, int mode, Vector3 goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadStructure<Vector3>());
-                    Color2Interpolator.Set(SecondaryColor, new Color(goal), time, InterpolationModes.Modes[mode]);
+                    Color2Interpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    Color2Interpolator.Initial = Color2Interpolator.Final;
+                    Color2Interpolator.Final = new Color(buffer.Read<Vector3>());
                     break;
                 }
                 case AnimationFile.Opcode.Alpha2Time: {
-                    (int time, int mode, float goal) = (buffer.ReadI32(), buffer.ReadI32(), buffer.ReadF32());
-                    Alpha2Interpolator.Set(SecondaryColor, new Color(Color.White, goal), time, InterpolationModes.Modes[mode]);
+                    Alpha2Interpolator.ResetTime(buffer.ReadI32(), InterpolationModes.Modes[buffer.ReadI32()]);
+                    Alpha2Interpolator.Initial = Alpha2Interpolator.Final;
+                    Alpha2Interpolator.Final = new Color(Color.White, buffer.ReadF32());
                     break;
                 }
                 case AnimationFile.Opcode.ColorSwap:
                     ColorSwapped = (buffer.ReadI32() & 2) > 0;
                     break;
                 case AnimationFile.Opcode.CaseReturn:
-                    Ip = ReturnIp;
-                    Time = (ushort) ReturnTime;
+                    (Ip, Time, ReturnIp, ReturnTime) = (ReturnIp, (ushort) ReturnTime, -1, -1);
                     break;
                 case AnimationFile.Opcode.ParsingEnd:
                     throw new NotImplementedException("This should never happen.");
@@ -471,6 +565,13 @@ public class AnmVm {
             Behind,
             Darken,
             Lighten
+        }
+
+        public enum SpriteType {
+            Enemy, // TODO: Implement enemies
+            Ui, // TODO: Implement UI
+            StageRect,
+            StageStrip
         }
     }
 }

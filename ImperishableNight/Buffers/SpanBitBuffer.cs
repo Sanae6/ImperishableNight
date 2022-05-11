@@ -1,9 +1,9 @@
 ﻿namespace ImperishableNight.Buffers;
 
 public ref struct SpanBitBuffer {
-    private uint byteCount = 0;
-    private uint curBits = 0;
-    private uint curByte = 0;
+    private uint ByteCount = 0;
+    private uint CurBits = 0;
+    private uint CurByte = 0;
 
     public SpanBitBuffer() { }
 
@@ -18,14 +18,14 @@ public ref struct SpanBitBuffer {
             return (r << (int) bits) | Read(ref buffer, bits);
         }
 
-        while (bits > curBits) {
+        while (bits > CurBits) {
             byte c = buffer.ReadU8();
-            curByte = (curByte << 8) | c;
-            curBits += 8;
-            byteCount++;
+            CurByte = (CurByte << 8) | c;
+            CurBits += 8;
+            ByteCount++;
         }
 
-        curBits -= bits;
-        return (uint) ((curByte >> (int) curBits) & ((1 << (int) bits) - 1));
+        CurBits -= bits;
+        return (uint) ((CurByte >> (int) CurBits) & ((1 << (int) bits) - 1));
     }
 }

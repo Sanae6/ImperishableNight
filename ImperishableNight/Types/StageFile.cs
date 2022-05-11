@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using ImperishableNight.Buffers;
 using OpenTK.Mathematics;
 
@@ -9,7 +10,8 @@ public class StageFile {
     public Song[] Songs;
     public Dictionary<int, ObjectData> Objects;
     public List<Instance> Instances;
-    public List<StdInstruction> Instructions;
+    public List<StdInstruction> Instructions = new List<StdInstruction>();
+
     private StageFile() { }
 
     public static StageFile ReadStd(Span<byte> data) {
@@ -29,12 +31,13 @@ public class StageFile {
             Span<int> offsets = buffer.Slice<int>(numObjects);
             foreach (int objectOffset in offsets) {
                 buffer.Offset = objectOffset;
-                ObjectInfo objectInfo = buffer.ReadStructure<ObjectInfo>();
+                ObjectInfo objectInfo = buffer.Read<ObjectInfo>();
                 List<Quad> quads = new List<Quad>();
+                int i = 0;
 
                 while (true) {
-                    Quad quad = buffer.ReadStructure<Quad>();
-                    if (quad.StructSize == 4) break;
+                    Quad quad = buffer.ReadDynamic<Quad>();
+                    if (quad.Type == QuadType.End) break;
                     quads.Add(quad);
                 }
 
@@ -44,20 +47,22 @@ public class StageFile {
         {
             buffer.Offset = instancesOffset;
             for (int i = 0; i < numInstances; i++)
-                instances.Add(buffer.ReadStructure<Instance>());
+                instances.Add(buffer.Read<Instance>());
         }
         {
             buffer.Offset = scriptOffset;
+            int offset = 0,
+                i = 0;
             while (true) {
-                InstructionHeader header = buffer.ReadStructure<InstructionHeader>();
-                if (header.Size == 0xFFFF)
-                    break;
-                instructions.Add(new StdInstruction {
-                    Time = header.Time,
-                    Type = header.Type,
-                    Size = header.Size,
-                    Data = buffer.ReadBytes(header.Size).ToArray()
-                });
+                {
+                    Bookmark headerStart = buffer.BookmarkLocation(6);
+                    if (buffer.ReadU16() == 0xFFFF)
+                        break;
+                    headerStart.Jump(ref buffer);
+                }
+                StdInstruction header = buffer.ReadDynamic<StdInstruction>();
+                header.Index = i;
+                instructions.Add(header);
             }
         }
 
@@ -82,43 +87,124 @@ public class StageFile {
     public record struct ObjectInfo {
         public ushort Id;
 #pragma warning disable CS0169
-        private ushort padding;
+        private ushort Padding;
 #pragma warning restore CS0169
         public Vector3 Position;
         public Vector3 Size;
     }
 
-    public record struct Quad {
-#pragma warning disable CS0169
-        private ushort unk;
-#pragma warning restore CS0169
-        public ushort StructSize;
+    public record struct Quad : IDynamicStructure {
+        public QuadType Type;
         public ushort ScriptIndex;
-#pragma warning disable CS0169
-        private ushort padding;
-#pragma warning restore CS0169
+        public IQuadExtra QuadExtra;
+
+        public void Load(ref SpanBuffer slice) {
+            Type = slice.Read<QuadType>();
+            int size = slice.ReadU16();
+            ScriptIndex = slice.ReadU16();
+            slice.Offset += 2;
+            switch (Type, size) {
+                case (QuadType.Rectangle, 0x1c):
+                    QuadExtra = slice.Read<RectQuadExtra>();
+                    break;
+                case (QuadType.Strip, 0x24):
+                    QuadExtra = slice.Read<StripQuadExtra>();
+                    break;
+                case (QuadType.End, 4):
+                    break;
+                default:
+                    throw new InvalidDataException($"Invalid quad header (type: {Type}, size: {size})");
+            }
+        }
+
+        public void Save(ref SpanBuffer slice) {
+            throw new NotImplementedException();
+        }
+    }
+
+    public interface IQuadExtra { }
+
+    public struct RectQuadExtra : IQuadExtra {
         public Vector3 Position;
         public Vector2 Size;
+    }
+
+    public struct StripQuadExtra : IQuadExtra {
+        public Vector3 Start;
+        public Vector3 End;
+        public float Width;
+    }
+
+    public enum QuadType : ushort {
+        Rectangle,
+        Strip,
+        End = ushort.MaxValue
     }
 
     public record struct Instance {
         public ushort ObjectId;
 #pragma warning disable CS0169
-        private ushort padding;
+        private ushort Padding;
 #pragma warning restore CS0169
         public Vector3 Position;
     }
 
-    public struct StdInstruction {
+    public struct StdInstruction : IDynamicStructure {
+        public const int HeaderSize = 8;
         public int Time;
-        public ushort Type;
+        public Opcode Type;
+        public int Index;
         public ushort Size;
         public byte[] Data;
+        public SpanBuffer Buffer => new SpanBuffer(Data);
+
+        public void Load(ref SpanBuffer slice) {
+            Time = slice.ReadI32();
+            Type = (Opcode) slice.ReadU16();
+            Size = slice.ReadU16();
+            Data = slice.ReadBytes(Size).ToArray();
+        }
+
+        public void Save(ref SpanBuffer slice) {
+            throw new NotImplementedException();
+        }
     }
 
-    private struct InstructionHeader {
-        public int Time;
-        public ushort Type;
-        public ushort Size;
+    public enum Opcode : ushort {
+        PosKeyframe,
+        Fog,
+        FogTime,
+        Stop,
+        Jump,
+        Pos,
+        PosTime,
+        Facing,
+        FacingTime,
+        Up,
+        UpTime,
+        Fov,
+        FovTime,
+        ClearColor,
+        PosInitial,
+        PosFinal,
+        PosInitialDerivative,
+        PosFinalDerivative,
+        PosBezier,
+        FacingInitial,
+        FacingFinal,
+        FacingInitialDerivative,
+        FacingFinalDerivative,
+        FacingBezier,
+        UpInitial,
+        UpFinal,
+        UpInitialDerivative,
+        UpFinalDerivative,
+        UpBezier,
+        SpriteA, // https://exphp.github.io/thpages/#/std/ins?g=08#ins-29
+        SpriteB, // https://exphp.github.io/thpages/#/std/ins?g=08#ins-30
+        InterruptLabel,
+        RockVector,
+        RockMode,
+        SpriteC // https://exphp.github.io/thpages/#/std/ins?g=08#ins-34
     }
 }

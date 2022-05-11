@@ -8,11 +8,20 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.0.1641" />
+        <TrimmerRootAssembly Include="MonoGame.Framework" Visible="false" />
     </ItemGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\ImperishableNight\ImperishableNight.csproj" />
+        <PackageReference Include="MonoGame.Framework.DesktopGL" Version="3.8.0.1641"/>
+        <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.0.1641"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <ProjectReference Include="..\ImperishableNight\ImperishableNight.csproj"/>
+    </ItemGroup>
+
+    <Target Name="RestoreDotnetTools" BeforeTargets="Restore">
+        <Message Text="Restoring dotnet tools" Importance="High" />
+        <Exec Command="dotnet tool restore" />
+    </Target>
 </Project>
