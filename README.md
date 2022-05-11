@@ -1,7 +1,8 @@
 # ImperishableNight
 Awful reimplementation of Imperishable Night's engine in C#
 
-![Picture of the engine running](https://user-images.githubusercontent.com/32604996/167749731-ec4d2485-3b3e-4c9a-9138-b4a2f7e1b9f8.png)
+![Picture of the engine running](https://user-images.githubusercontent.com/32604996/167769225-6cdd5558-1a17-4024-bf27-b9237cf5715b.png)
+
 
 Core progress:
 - Archive
